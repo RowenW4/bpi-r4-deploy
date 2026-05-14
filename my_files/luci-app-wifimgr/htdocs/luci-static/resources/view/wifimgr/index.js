@@ -47,6 +47,7 @@ var _tabNavBtns     = {};
 var _onApplied      = null;
 var _netExpandState = {}; // sid → {expanded, editMode} — survives poll re-renders
 var _lastFormTouch  = 0;  // timestamp of last form interaction — blocks poll re-render
+var _pendingTxMode  = null; // user-selected TX mode not yet saved to UCI — survives re-renders
 
 // ── STATIC TAB LIST ───────────────────────────────────────────────────────────
 // Networks | Radios | Clients | Diagnostics (always visible)
@@ -708,7 +709,7 @@ function wizardStation(onDone) {
                             var row = node('tr', { style: 'cursor:pointer;border-top:1px solid rgba(255,255,255,.08)' });
                             row.appendChild(node('td', { style: 'padding:6px 8px' },
                                 node('span', { style: 'color:' + sigColor }, sigPct + '%')));
-                            row.appendChild(node('td', { style: 'padding:6px 8px' }, bandPill(bandLabel)));
+                            row.appendChild(node('td', { style: 'padding:6px 8px' }, bandPill(bandRadio)));
                             row.appendChild(node('td', { style: 'padding:6px 8px;font-weight:500' }, bss.ssid || ''));
                             row.appendChild(node('td', { style: 'padding:6px 8px;opacity:.6' }, String(bss.channel || '')));
                             row.appendChild(node('td', { style: 'padding:6px 8px;opacity:.6;font-size:11px' }, bss.encryption || 'open'));
@@ -791,13 +792,14 @@ function wizardStation(onDone) {
         var bssidIn  = inputField('', 'AA:BB:CC:DD:EE:FF');
         var STA_ENC_OPTS = {
             radio0: [['auto','auto'],['sae-mixed','WPA2/WPA3'],['sae','WPA3'],['psk2','WPA2'],['none','Open']],
-            radio1: [['auto','auto'],['sae-mixed','WPA2/WPA3'],['sae','WPA3'],['psk2','WPA2'],['none','Open']]
+            radio1: [['auto','auto'],['sae-mixed','WPA2/WPA3'],['sae','WPA3'],['psk2','WPA2'],['none','Open']],
+            mlo:    [['sae','WPA3'],['sae-mixed','WPA2/WPA3']]
         };
         var encSel   = selectEl(STA_ENC_OPTS.radio1, 'auto');
         var wdsCb    = checkbox(false);
 
         function updateStaEnc() {
-            var band = mloCb.checked ? 'radio1' : bandSel.value;
+            var band = mloCb.checked ? 'mlo' : bandSel.value;
             var opts = STA_ENC_OPTS[band] || STA_ENC_OPTS.radio1;
             while (encSel.firstChild) encSel.removeChild(encSel.firstChild);
             opts.forEach(function(o) { encSel.appendChild(node('option', { value: o[0] }, o[1])); });
@@ -892,7 +894,7 @@ function wizardWDS(onDone) {
                             var row = node('tr', { style: 'cursor:pointer;border-top:1px solid rgba(255,255,255,.08)' });
                             row.appendChild(node('td', { style: 'padding:6px 8px' },
                                 node('span', { style: 'color:' + sigColor }, sigPct + '%')));
-                            row.appendChild(node('td', { style: 'padding:6px 8px' }, bandPill(bandLabel)));
+                            row.appendChild(node('td', { style: 'padding:6px 8px' }, bandPill(bandRadio)));
                             row.appendChild(node('td', { style: 'padding:6px 8px;font-weight:500' }, bss.ssid || ''));
                             row.appendChild(node('td', { style: 'padding:6px 8px;opacity:.6' }, String(bss.channel || '')));
                             row.appendChild(node('td', { style: 'padding:6px 8px;opacity:.6;font-size:11px' }, bss.encryption || 'open'));
@@ -1012,7 +1014,7 @@ function wizardRepeater(onDone) {
             while (scanArea.firstChild) scanArea.removeChild(scanArea.firstChild);
             data.forEach(function(n) {
                 var b = (n.mhz >= 5925) ? 6 : (n.mhz >= 5000) ? 5 : 2;
-                var bandLabel = b === 6 ? '6 GHz' : b === 5 ? '5 GHz' : '2.4 GHz';
+                var bandRadio = b === 6 ? 'radio2' : b === 5 ? 'radio1' : 'radio0';
                 var sigPct = n.quality_max ? Math.round(100 * n.quality / n.quality_max) : 0;
                 var sigColor = sigPct >= 66 ? '#4caf50' : sigPct >= 33 ? '#f5a623' : '#e53935';
                 var r = node('div', {
@@ -1024,7 +1026,7 @@ function wizardRepeater(onDone) {
                         muted('  ' + (n.encryption || 'open'))
                     ),
                     node('div', { style: 'display:flex;align-items:center;gap:8px' },
-                        bandPill(bandLabel),
+                        bandPill(bandRadio),
                         node('span', { style: 'color:' + sigColor }, sigPct + '%')
                     )
                 );
@@ -1103,6 +1105,11 @@ function wizardRepeater(onDone) {
             });
         }
 
+        uplinkRadioSel.addEventListener('change', function() {
+            if (apRadioSel.value === uplinkRadioSel.value)
+                apRadioSel.value = apRadioSel.value === 'radio0' ? 'radio1' : 'radio0';
+        });
+
         var scanBtn = btnSecondary('Scan', doScan);
 
         body.appendChild(node('div', { style: 'color:#666;font-size:12px;margin-bottom:14px;line-height:1.5' },
@@ -1176,12 +1183,12 @@ function openScanNearby() {
             while (tbl.rows.length > 1) tbl.deleteRow(1);
             data.forEach(function(bss) {
                 var b = (bss.mhz >= 5925) ? 6 : (bss.mhz >= 5000) ? 5 : 2;
-                var bandLabel = b === 6 ? '6 GHz' : b === 5 ? '5 GHz' : '2.4 GHz';
+                var bandRadio = b === 6 ? 'radio2' : b === 5 ? 'radio1' : 'radio0';
                 var sigPct = bss.quality_max ? Math.round(100 * bss.quality / bss.quality_max) : 0;
                 var sigColor = sigPct >= 66 ? '#4caf50' : sigPct >= 33 ? '#f5a623' : '#e53935';
                 var row = node('tr', { style: 'border-top:1px solid rgba(255,255,255,.06)' });
                 row.appendChild(node('td', { style: 'padding:4px 8px' }, node('span', { style: 'color:' + sigColor }, sigPct + '%')));
-                row.appendChild(node('td', { style: 'padding:4px 8px' }, bandPill(bandLabel)));
+                row.appendChild(node('td', { style: 'padding:4px 8px' }, bandPill(bandRadio)));
                 row.appendChild(node('td', { style: 'padding:4px 8px;color:#ddd;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, bss.ssid || ''));
                 row.appendChild(node('td', { style: 'padding:4px 8px;color:#aaa' }, String(bss.channel || '')));
                 row.appendChild(node('td', { style: 'padding:4px 8px;color:#aaa;white-space:nowrap' }, scanWidth(bss)));
@@ -1272,7 +1279,7 @@ function renderNetworks(data) {
         e.stopPropagation();
         ddMenu.style.display = ddMenu.style.display === 'none' ? 'block' : 'none';
     };
-    document.addEventListener('click', function() { ddMenu.style.display = 'none'; });
+    document.addEventListener('click', function() { ddMenu.style.display = 'none'; }, { once: true });
     ddWrap.appendChild(ddBtn);
     ddWrap.appendChild(ddMenu);
     var topBtns = node('div', { style: 'display:flex;gap:8px;align-items:center' },
@@ -1493,7 +1500,8 @@ function netRow(type, iface, data, cliCount, country, isLast) {
             var uplink = (data.uplinks || []).find(function(u) { return u.sid === sid; });
             if (uplink) {
                 b.appendChild(sp('Connection status', 'display:block;color:#88888899;font-size:11px;font-weight:bold;letter-spacing:0.5px;margin:10px 0 6px'));
-                var _staRadio = (iface.radio && data.radios) ? data.radios.find(function(r) { return r.id === iface.radio; }) : null;
+                var _staRid = iface.device ? (Array.isArray(iface.device) ? iface.device[0] : iface.device) : null;
+                var _staRadio = (_staRid && data.radios) ? data.radios.find(function(r) { return r.id === _staRid; }) : null;
                 var _staNoise = _staRadio && _staRadio.noise != null ? _staRadio.noise : null;
                 // Add new connection fields here
                 var connItems = [
@@ -1537,7 +1545,12 @@ function netRow(type, iface, data, cliCount, country, isLast) {
                 : 'Remove "' + ssid + '"?';
             if (!confirm(warn)) return;
             applyFlow(applyDiv, function() {
+                var isRelaydUplink = !is_mld && data.relayd && data.relayd.active &&
+                    iface.network && iface.network === data.relayd.uplink_net;
+                var isRepeaterSta = !is_mld && iface.repeater && iface.mode === 'sta';
                 var prom = is_mld ? layer2.mld_remove(sid) : layer2.iface_remove(sid);
+                if (isRelaydUplink) prom = prom.then(function() { return layer2.relayd_remove(); });
+                if (isRepeaterSta) prom = prom.then(function() { return layer2.repeater_fw_remove(); });
                 return prom.then(function(r) { return Object.assign({ restartRequired: 'wifi' }, r); });
             }, _onApplied);
         }));
@@ -1688,7 +1701,7 @@ function renderClients(data) {
             });
         } else {
             var iface = (data.ifaces || []).find(function(f) { return f.ifname === c.ifname; });
-            if (iface && iface.radio) hdrEl.appendChild(bandPill(iface.radio));
+            if (iface && iface.device) hdrEl.appendChild(bandPill(Array.isArray(iface.device) ? iface.device[0] : iface.device));
         }
 
         // Signal (best per-link for MLO — iw top-level is 0 for MLO)
@@ -1800,20 +1813,50 @@ function renderRadios(data) {
     var country = (radios.length ? radios[0].country : null) || '—';
     var curTxMode = (radios.length ? radios[0].txpower_mode : null) || 'regdb';
     var TX_MODES = [['regdb','Regulatory (country regdb)'],['efuse_max','eFuse max (hardware maximum)'],['manual','Manual (per-radio dBm)']];
-    var txModeSel = selectEl(TX_MODES, curTxMode);
-    var radioTxInputs = []; // populated in radios.forEach below; used by system Apply & Reboot
-    txModeSel.onchange = function() {
-        var isManual = txModeSel.value === 'manual';
-        el.querySelectorAll('.txpower-manual-row').forEach(function(row) { row.style.display = isManual ? '' : 'none'; });
-    };
+    var txModeSel = selectEl(TX_MODES, _pendingTxMode || curTxMode);
+    var radioTxInputs = []; // populated in radios.forEach below; used by system Apply button
     var sysApplyDiv = node('div', {});
     var modeHints = {
         regdb:     'Regulatory: country SKU table enforced — stays within legal limits.',
         efuse_max: 'eFuse max: hardware maximum, ignores country limits. Use only if you know what you\'re doing.',
-        manual:    'Manual: enter dBm limits in the radio cards below, then click Apply & Reboot here — mode and limits are saved in one step.'
+        manual:    'Manual: enter dBm limits in the radio cards below, then click Apply here — mode and limits are saved in one step.'
     };
     var modeHintEl = sp(modeHints[curTxMode] || '', 'color:#555;font-size:11px;margin-bottom:8px;display:block');
-    txModeSel.addEventListener('change', function() { modeHintEl.textContent = modeHints[txModeSel.value] || ''; });
+    var applyTxBtn = btn(curTxMode === 'manual' && !_pendingTxMode ? 'Apply' : 'Apply & Reboot', null, function() {
+        applyFlow(sysApplyDiv, function() {
+            var mode = txModeSel.value;
+            var modeChanged = mode !== curTxMode;
+            if (!modeChanged && mode === 'manual') {
+                // Only dBm values changed — wifi reload is enough, no reboot needed
+                var txPromises = radioTxInputs
+                    .filter(function(item) { return item.txIn.value.trim(); })
+                    .map(function(item) { return layer2.radio_set(item.rid, { txpower: item.txIn.value.trim() }); });
+                if (!txPromises.length) return Promise.resolve({ ok: true, restartRequired: 'wifi', errors: [] });
+                return Promise.all(txPromises).then(function() {
+                    _pendingTxMode = null;
+                    return { ok: true, restartRequired: 'wifi', errors: [] };
+                });
+            }
+            return layer2.system_set_txpower_mode(mode).then(function(modeRes) {
+                if (!modeRes.ok) return modeRes;
+                _pendingTxMode = null;
+                if (mode !== 'manual') return modeRes;
+                var txPromises = radioTxInputs
+                    .filter(function(item) { return item.txIn.value.trim(); })
+                    .map(function(item) { return layer2.radio_set(item.rid, { txpower: item.txIn.value.trim() }); });
+                if (!txPromises.length) return modeRes;
+                return Promise.all(txPromises).then(function() { return modeRes; });
+            });
+        }, _onApplied);
+    });
+    txModeSel.onchange = function() {
+        var sel = txModeSel.value;
+        _pendingTxMode = sel !== curTxMode ? sel : null;
+        var isManual = sel === 'manual';
+        el.querySelectorAll('.txpower-manual-row').forEach(function(row) { row.style.display = isManual ? '' : 'none'; });
+        modeHintEl.textContent = modeHints[sel] || '';
+        applyTxBtn.textContent = (!_pendingTxMode && curTxMode === 'manual') ? 'Apply' : 'Apply & Reboot';
+    };
     el.appendChild(card(node('div', {},
         node('div', { style: 'display:flex;align-items:center;justify-content:space-between;margin-bottom:10px' },
             node('div', {},
@@ -1825,21 +1868,7 @@ function renderRadios(data) {
         ),
         formRow('TX power mode', txModeSel),
         modeHintEl,
-        node('div', { style: 'display:flex;gap:8px' },
-            btn('Apply & Reboot', null, function() {
-                applyFlow(sysApplyDiv, function() {
-                    var mode = txModeSel.value;
-                    return layer2.system_set_txpower_mode(mode).then(function(modeRes) {
-                        if (!modeRes.ok || mode !== 'manual') return modeRes;
-                        var txPromises = radioTxInputs
-                            .filter(function(item) { return item.txIn.value.trim(); })
-                            .map(function(item) { return layer2.radio_set(item.rid, { txpower: item.txIn.value.trim() }); });
-                        if (!txPromises.length) return modeRes;
-                        return Promise.all(txPromises).then(function() { return modeRes; });
-                    });
-                }, _onApplied);
-            })
-        ),
+        node('div', { style: 'display:flex;gap:8px' }, applyTxBtn),
         sysApplyDiv
     )));
 

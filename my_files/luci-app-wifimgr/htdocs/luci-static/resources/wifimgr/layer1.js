@@ -175,7 +175,7 @@ async function uci_write(config, section, values) {
         for (const [k, v] of Object.entries(values)) {
             if (v === null)
                 parts.push(`{ /sbin/uci -q delete '${config}.${section}.${k}' 2>/dev/null || true; }`);
-            else
+            else if (v !== undefined)
                 parts.push(`/sbin/uci set '${config}.${section}.${k}=${v}'`);
         }
         parts.push(`/sbin/uci commit '${config}'`);
@@ -185,6 +185,7 @@ async function uci_write(config, section, values) {
         const verify = await fs.exec('/sbin/uci', ['show', `${config}.${section}`]);
         let allMatch = true;
         for (const [k, v] of Object.entries(values)) {
+            if (v === undefined) continue;
             const present = verify.stdout.includes(`${config}.${section}.${k}=`);
             if (v === null ? present : !present) { allMatch = false; break; }
         }
@@ -596,14 +597,17 @@ async function iw_link(ifname) {
 }
 
 async function iwinfo_scan(radio_id) {
-    try {
-        // 5GHz and 6GHz AP interfaces return empty scan on MT7996 while in EHT mode.
-        // Only 2.4GHz (phy0.0-ap0) scan works reliably — always use it.
-        const results = await callIwInfoScan('phy0.0-ap0');
-        return ok(Array.isArray(results) ? results : []);
-    } catch(e) {
-        return mkErr('exec_failed');
+    // When a STA interface is active, wpa_supplicant owns the nl80211 scan state
+    // and ubus iwinfo scan on the AP interface returns empty. Try phy0.0-sta0 first
+    // (wpa_supplicant keeps fresh scan results); fall back to phy0.0-ap0 for pure
+    // AP setups. Each call wrapped separately — phy0.0-sta0 may not exist on AP-only
+    // routers and returns ubus "Not found" error.
+    let results = [];
+    try { results = await callIwInfoScan('phy0.0-sta0'); } catch(_) {}
+    if (!Array.isArray(results) || !results.length) {
+        try { results = await callIwInfoScan('phy0.0-ap0'); } catch(_) {}
     }
+    return ok(Array.isArray(results) ? results : []);
 }
 
 async function iw_phy_info() {
