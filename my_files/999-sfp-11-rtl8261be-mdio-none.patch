@@ -4,7 +4,7 @@
  	sfp_fixup_long_startup(sfp);
  	sfp_fixup_ignore_hw(sfp, SFP_F_TX_FAULT | SFP_F_LOS);
  }
-
+ 
 +/* Local mirror of rollball constants from mdio-i2c.c */
 +#define SFP_ROLLBALL_PHY_ADDR   0x51
 +#define SFP_ROLLBALL_MDIO_PAGE  3
@@ -99,7 +99,7 @@
 +	sfp_fixup_rollball(sfp);
 +	sfp->id.base.extended_cc = SFF8024_ECC_10GBASE_T_SFI;
 +}
-
+ 
  static void sfp_quirk_2500basex(const struct sfp_eeprom_id *id,
 @@ -635,7 +687,9 @@ static const struct sfp_quirk sfp_quirks[] = {
  	SFP_QUIRK_F("ETU", "ESP-T5-R", sfp_fixup_rollball_cc),
