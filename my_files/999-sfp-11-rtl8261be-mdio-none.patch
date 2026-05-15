@@ -1,0 +1,107 @@
+--- a/drivers/net/phy/sfp.c
++++ b/drivers/net/phy/sfp.c
+@@ -456,13 +456,90 @@
+ 	sfp_fixup_ignore_hw(sfp, SFP_F_TX_FAULT | SFP_F_LOS);
+ }
+ 
+-static void sfp_fixup_rollball_cc(struct sfp *sfp)
++/* Local mirror of rollball constants from mdio-i2c.c */
++#define SFP_ROLLBALL_PHY_ADDR   0x51
++#define SFP_ROLLBALL_MDIO_PAGE  3
++#define SFP_ROLLBALL_CMD_ADDR   0x80
++#define SFP_ROLLBALL_CMD_READ   0x02
++#define SFP_ROLLBALL_CMD_DONE   0x04
++
++static int sfp_rollball_a2_write(struct sfp *sfp, u8 reg, const u8 *data, int len)
+ {
+-	sfp_fixup_rollball(sfp);
++	struct i2c_msg msg;
++	u8 buf[8];
++
++	buf[0] = reg;
++	memcpy(buf + 1, data, len);
++	msg.addr  = SFP_ROLLBALL_PHY_ADDR;
++	msg.flags = 0;
++	msg.len   = len + 1;
++	msg.buf   = buf;
++	return i2c_transfer(sfp->i2c, &msg, 1) == 1 ? 0 : -EIO;
++}
++
++static int sfp_rollball_a2_read1(struct sfp *sfp, u8 reg, u8 *val)
++{
++	struct i2c_msg msgs[2];
+ 
+-	/* Some RollBall SFPs may have wrong (zero) extended compliance code
+-	 * burned in EEPROM. For PHY probing we need the correct one.
++	msgs[0].addr  = SFP_ROLLBALL_PHY_ADDR;
++	msgs[0].flags = 0;
++	msgs[0].len   = 1;
++	msgs[0].buf   = &reg;
++	msgs[1].addr  = SFP_ROLLBALL_PHY_ADDR;
++	msgs[1].flags = I2C_M_RD;
++	msgs[1].len   = 1;
++	msgs[1].buf   = val;
++	return i2c_transfer(sfp->i2c, msgs, 2) == 2 ? 0 : -EIO;
++}
++
++/* Probe for a RollBall I2C-to-MDIO bridge by sending the unlock password,
++ * switching to the MDIO page, issuing CMD_READ and polling for CMD_DONE.
++ * A real RollBall bridge asserts CMD_DONE within ~70 ms; modules without a
++ * bridge (e.g. RTL8261BE pure media converter) never assert it, so the poll
++ * times out after 200 ms.  Returns true only when CMD_DONE is observed.
++ */
++static bool sfp_has_rollball_bridge(struct sfp *sfp)
++{
++	u8 pw[4] = { 0xff, 0xff, 0xff, 0xff };
++	u8 page = SFP_ROLLBALL_MDIO_PAGE;
++	u8 cmd  = SFP_ROLLBALL_CMD_READ;
++	u8 saved_page = 0, res;
++	int i;
++
++	if (sfp_rollball_a2_write(sfp, SFP_VSL + 3, pw, sizeof(pw)) < 0)
++		return false;
++
++	sfp_rollball_a2_read1(sfp, SFP_PAGE, &saved_page);
++
++	if (sfp_rollball_a2_write(sfp, SFP_PAGE, &page, 1) < 0 ||
++	    sfp_rollball_a2_write(sfp, SFP_ROLLBALL_CMD_ADDR, &cmd, 1) < 0)
++		goto restore;
++
++	for (i = 0; i < 10; i++) {
++		msleep(20);
++		if (sfp_rollball_a2_read1(sfp, SFP_ROLLBALL_CMD_ADDR, &res) == 0 &&
++		    res == SFP_ROLLBALL_CMD_DONE) {
++			sfp_rollball_a2_write(sfp, SFP_PAGE, &saved_page, 1);
++			return true;
++		}
++	}
++
++restore:
++	sfp_rollball_a2_write(sfp, SFP_PAGE, &saved_page, 1);
++	return false;
++}
++
++static void sfp_fixup_rollball_cc(struct sfp *sfp)
++{
++	/* Probe for I2C-to-MDIO bridge: real RollBall modules assert CMD_DONE
++	 * within ~70 ms; pure media converters (e.g. RTL8261BE) have no bridge
++	 * and the probe times out after 200 ms -- skip PHY probing for those.
+ 	 */
++	if (!sfp_has_rollball_bridge(sfp)) {
++		sfp->mdio_protocol = MDIO_I2C_NONE;
++		return;
++	}
++	sfp_fixup_rollball(sfp);
+ 	sfp->id.base.extended_cc = SFF8024_ECC_10GBASE_T_SFI;
+ }
+ 
+@@ -607,7 +684,8 @@
+ 	SFP_QUIRK_S("TP-LINK", "TL-SM410U", sfp_quirk_oem_2_5g),
+ 
+ 	SFP_QUIRK_F("ETU", "ESP-T5-R", sfp_fixup_rollball_cc),
+-	SFP_QUIRK_F("OEM", "SFP-10G-T", sfp_fixup_rollball_cc),
++	SFP_QUIRK_F("OEM", "SFP-10G-T-I", sfp_fixup_rollball_cc),
++	SFP_QUIRK_F("OEM", "SFP-10G-T",   sfp_fixup_rollball_cc),
+ 	SFP_QUIRK_S("OEM", "SFP-2.5G-T", sfp_quirk_oem_2_5g),
+ 	SFP_QUIRK_S("OEM", "SFP-2.5G-BX10-D", sfp_quirk_2500basex),
+ 	SFP_QUIRK_S("OEM", "SFP-2.5G-BX10-U", sfp_quirk_2500basex),

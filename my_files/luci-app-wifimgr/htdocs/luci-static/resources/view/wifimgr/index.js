@@ -47,6 +47,7 @@ var _tabNavBtns     = {};
 var _onApplied      = null;
 var _netExpandState = {}; // sid → {expanded, editMode} — survives poll re-renders
 var _lastFormTouch  = 0;  // timestamp of last form interaction — blocks poll re-render
+var _pendingTxMode  = null; // user-selected TX mode not yet saved to UCI — survives re-renders
 
 // ── STATIC TAB LIST ───────────────────────────────────────────────────────────
 // Networks | Radios | Clients | Diagnostics (always visible)
@@ -421,8 +422,8 @@ function applyFlow(container, fn, onDone, lockFn) {
             clearInterval(timer);
             if (lockFn) lockFn(true);
             progress.style.display = 'none';
-            container.appendChild(inlineErr('Timeout — try: 1) reboot  2) power cycle'));
-        }, 180000);
+            container.appendChild(inlineErr('WiFi restart is taking longer than expected (DFS?) — check Networks tab. If nothing appeared, reboot.'));
+        }, 240000);
 
     }).catch(function(e) {
         spinner.style.display = 'none';
@@ -499,9 +500,6 @@ function wizardAP(onDone) {
         };
         var chanSel  = selectEl(CHAN_OPTS.radio1, 'auto');
         var widthSel = selectEl(WIDTH_OPTS.radio1, 'auto');
-        var txSel    = selectEl([['auto','Auto (regulatory)'],['manual','Manual']], 'auto');
-        var txpIn    = inputField('20', 'dBm');
-        txpIn.style.display = 'none'; txpIn.style.width = '70px';
         var ifaceSel = networkSel('lan');
         var isoIn    = checkbox(false);
         var hidIn    = checkbox(false);
@@ -523,14 +521,11 @@ function wizardAP(onDone) {
             eOpts.forEach(function(o) { encSel.appendChild(node('option', { value: o[0] }, o[1])); });
             dfsNote.style.display = radioSel.value === 'radio1' ? '' : 'none';
         };
-        txSel.onchange = function() { txpIn.style.display = txSel.value === 'manual' ? '' : 'none'; };
-
         var advBody = node('div', { style: 'margin-top:4px' });
         advBody.appendChild(formRow('Radio', radioSel));
         advBody.appendChild(dfsNote);
         advBody.appendChild(formRow('Channel', chanSel));
         advBody.appendChild(formRow('Width', widthSel));
-        advBody.appendChild(formRow('TX power', node('div', { style: 'display:flex;align-items:center;gap:6px' }, txSel, txpIn, sp('dBm', 'color:#888;font-size:12px'))));
         advBody.appendChild(formRow('Network', ifaceSel));
         advBody.appendChild(formRow('Isolate clients', isoIn));
         advBody.appendChild(sp('Blocks direct traffic between connected clients — useful for guest networks.', 'color:#555;font-size:11px;display:block;margin:-4px 0 4px'));
@@ -555,7 +550,6 @@ function wizardAP(onDone) {
                 var rp = {};
                 if (chanSel.value  !== 'auto') rp.channel = chanSel.value;
                 if (widthSel.value !== 'auto') rp.htmode  = 'EHT' + widthSel.value;
-                if (txSel.value === 'manual')  { rp.sku_idx = '0'; rp.txpower = txpIn.value; }
                 var radioPromise = Object.keys(rp).length
                     ? layer2.radio_set(rid, rp)
                     : Promise.resolve({ ok: true, errors: [] });
@@ -617,14 +611,10 @@ function wizardMLO(onDone) {
             var rid = pair[0], label = pair[1];
             var cSel = selectEl(CHAN_MLO[rid], 'auto');
             var wSel = selectEl([['auto','auto'],['20','20 MHz'],['40','40 MHz'],['80','80 MHz'],['160','160 MHz']], 'auto');
-            var tSel = selectEl([['auto','Auto'],['manual','Manual']], 'auto');
-            var tIn  = inputField('20', 'dBm'); tIn.style.display = 'none'; tIn.style.width = '70px';
-            tSel.onchange = function() { tIn.style.display = tSel.value === 'manual' ? '' : 'none'; };
             advBody.appendChild(node('div', { style: 'color:#aaa;font-size:12px;margin:8px 0 4px;font-weight:bold' }, label));
             advBody.appendChild(formRow('Channel', cSel));
             advBody.appendChild(formRow('Width', wSel));
-            advBody.appendChild(formRow('TX power', node('div', { style: 'display:flex;align-items:center;gap:6px' }, tSel, tIn, sp('dBm', 'color:#888;font-size:12px'))));
-            linkControls[rid] = { chanSel: cSel, widthSel: wSel, txSel: tSel, txIn: tIn };
+            linkControls[rid] = { chanSel: cSel, widthSel: wSel };
         });
 
         var ifaceSel    = networkSel('lan');
@@ -647,18 +637,17 @@ function wizardMLO(onDone) {
             if (emlDisableIn.checked) p.eml_disable = '1';
 
             applyFlow(applyDiv, function() {
-                // Apply per-link radio settings (channel, width, TX power)
-                var radioPromises = rids.map(function(rid) {
-                    var lc = linkControls[rid];
-                    var rp = {};
-                    if (lc.chanSel.value !== 'auto')  rp.channel = lc.chanSel.value;
-                    if (lc.widthSel.value !== 'auto') rp.htmode  = 'EHT' + lc.widthSel.value;
-                    if (lc.txSel.value === 'manual')  { rp.sku_idx = '0'; rp.txpower = lc.txIn.value; }
-                    return Object.keys(rp).length ? layer2.radio_set(rid, rp) : Promise.resolve({ ok: true, errors: [] });
-                });
-                return Promise.all(radioPromises).then(function(results) {
-                    var failed = results.find(function(r) { return !r.ok; });
-                    if (failed) return { ok: false, errors: failed.errors || ['Radio set failed'], restartRequired: 'none' };
+                return rids.reduce(function(chain, rid) {
+                    return chain.then(function(prev) {
+                        if (!prev.ok) return prev;
+                        var lc = linkControls[rid];
+                        var rp = {};
+                        if (lc.chanSel.value !== 'auto')  rp.channel = lc.chanSel.value;
+                        if (lc.widthSel.value !== 'auto') rp.htmode  = 'EHT' + lc.widthSel.value;
+                        return Object.keys(rp).length ? layer2.radio_set(rid, rp) : Promise.resolve({ ok: true, errors: [] });
+                    });
+                }, Promise.resolve({ ok: true, errors: [] })).then(function(last) {
+                    if (!last.ok) return { ok: false, errors: last.errors || ['Radio set failed'], restartRequired: 'none' };
                     return layer3.wizard_mlo(rids, p);
                 });
             }, function() { close(); if (onDone) onDone(); }, setCloseable);
@@ -674,17 +663,17 @@ function wizardStation(onDone) {
         var ssidIn   = inputField('', 'Upstream SSID');
         var passIn   = inputField('', 'Password', 'password');
         var mloCb    = checkbox(false);
-        var bandSel  = selectEl([['radio0','2.4 GHz'],['radio1','5 GHz'],['radio2','6 GHz']], 'radio1');
-        var assocSel = selectEl([['1','5 GHz (recommended)'],['0','2.4 GHz'],['2','6 GHz']], '1');
+        var bandSel  = selectEl([['radio0','2.4 GHz'],['radio1','5 GHz']], 'radio1');
+        var assocSel = selectEl([['1','5 GHz'],['0','2.4 GHz']], '1');
         var applyDiv = node('div', {});
 
         var mloRow   = formRow('MLO', mloCb);
         var mloHint  = sp('WiFi 7 multi-band connection — requires an active MLO AP on the other router.', 'color:#555;font-size:11px;display:block;margin:-4px 0 4px');
+        var mloConflictNote = node('div', { style: 'color:#e53935;font-size:11px;margin-top:3px;display:none' },
+            'Cannot add MLO STA — a local MLO AP is active on the same radios. Remove it first (Networks tab).');
         var assocRow = formRow('Assoc band', assocSel);
         assocRow.style.display = 'none';
         var bandRow  = formRow('Band', bandSel);
-        var r2Note   = node('div', { style: 'color:#f5a623;font-size:11px;margin-top:3px;display:none' },
-            '6 GHz STA cannot associate while a 3-band MLO AP is active on the same router');
 
         var scanErrDiv = node('div', {});
         var scanBtn = btnSecondary('Scan', function() {
@@ -720,7 +709,7 @@ function wizardStation(onDone) {
                             var row = node('tr', { style: 'cursor:pointer;border-top:1px solid rgba(255,255,255,.08)' });
                             row.appendChild(node('td', { style: 'padding:6px 8px' },
                                 node('span', { style: 'color:' + sigColor }, sigPct + '%')));
-                            row.appendChild(node('td', { style: 'padding:6px 8px' }, bandPill(bandLabel)));
+                            row.appendChild(node('td', { style: 'padding:6px 8px' }, bandPill(bandRadio)));
                             row.appendChild(node('td', { style: 'padding:6px 8px;font-weight:500' }, bss.ssid || ''));
                             row.appendChild(node('td', { style: 'padding:6px 8px;opacity:.6' }, String(bss.channel || '')));
                             row.appendChild(node('td', { style: 'padding:6px 8px;opacity:.6;font-size:11px' }, bss.encryption || 'open'));
@@ -785,24 +774,17 @@ function wizardStation(onDone) {
         body.appendChild(formRow('Password', pwdWrap(passIn)));
         body.appendChild(mloRow);
         body.appendChild(mloHint);
+        body.appendChild(mloConflictNote);
         body.appendChild(assocRow);
         body.appendChild(bandRow);
-        body.appendChild(r2Note);
-
-        function updateBandNote() {
-            var is6g = !mloCb.checked && bandSel.value === 'radio2';
-            var hasMloOn6g = is6g && _data && (_data.mlds || []).some(function(m) {
-                return (m.radios || []).indexOf('radio2') >= 0;
-            });
-            r2Note.style.display = hasMloOn6g ? 'block' : 'none';
-        }
-        updateBandNote();
 
         mloCb.addEventListener('change', function() {
             var mlo = mloCb.checked;
             assocRow.style.display = mlo ? '' : 'none';
             bandRow.style.display  = mlo ? 'none' : '';
-            updateBandNote();
+            var hasLocalMloAp = mlo && (_data.mlds || []).some(function(m) { return m.mode === 'ap'; });
+            mloConflictNote.style.display = hasLocalMloAp ? 'block' : 'none';
+            goBtn.disabled = hasLocalMloAp;
         });
 
         var ipSel    = selectEl([['dhcp','DHCP'],['static','Static']], 'dhcp');
@@ -811,13 +793,13 @@ function wizardStation(onDone) {
         var STA_ENC_OPTS = {
             radio0: [['auto','auto'],['sae-mixed','WPA2/WPA3'],['sae','WPA3'],['psk2','WPA2'],['none','Open']],
             radio1: [['auto','auto'],['sae-mixed','WPA2/WPA3'],['sae','WPA3'],['psk2','WPA2'],['none','Open']],
-            radio2: [['sae','WPA3'],['owe','OWE (open secure)']]
+            mlo:    [['sae','WPA3'],['sae-mixed','WPA2/WPA3']]
         };
         var encSel   = selectEl(STA_ENC_OPTS.radio1, 'auto');
         var wdsCb    = checkbox(false);
 
         function updateStaEnc() {
-            var band = mloCb.checked ? 'radio1' : bandSel.value;
+            var band = mloCb.checked ? 'mlo' : bandSel.value;
             var opts = STA_ENC_OPTS[band] || STA_ENC_OPTS.radio1;
             while (encSel.firstChild) encSel.removeChild(encSel.firstChild);
             opts.forEach(function(o) { encSel.appendChild(node('option', { value: o[0] }, o[1])); });
@@ -912,7 +894,7 @@ function wizardWDS(onDone) {
                             var row = node('tr', { style: 'cursor:pointer;border-top:1px solid rgba(255,255,255,.08)' });
                             row.appendChild(node('td', { style: 'padding:6px 8px' },
                                 node('span', { style: 'color:' + sigColor }, sigPct + '%')));
-                            row.appendChild(node('td', { style: 'padding:6px 8px' }, bandPill(bandLabel)));
+                            row.appendChild(node('td', { style: 'padding:6px 8px' }, bandPill(bandRadio)));
                             row.appendChild(node('td', { style: 'padding:6px 8px;font-weight:500' }, bss.ssid || ''));
                             row.appendChild(node('td', { style: 'padding:6px 8px;opacity:.6' }, String(bss.channel || '')));
                             row.appendChild(node('td', { style: 'padding:6px 8px;opacity:.6;font-size:11px' }, bss.encryption || 'open'));
@@ -1032,7 +1014,7 @@ function wizardRepeater(onDone) {
             while (scanArea.firstChild) scanArea.removeChild(scanArea.firstChild);
             data.forEach(function(n) {
                 var b = (n.mhz >= 5925) ? 6 : (n.mhz >= 5000) ? 5 : 2;
-                var bandLabel = b === 6 ? '6 GHz' : b === 5 ? '5 GHz' : '2.4 GHz';
+                var bandRadio = b === 6 ? 'radio2' : b === 5 ? 'radio1' : 'radio0';
                 var sigPct = n.quality_max ? Math.round(100 * n.quality / n.quality_max) : 0;
                 var sigColor = sigPct >= 66 ? '#4caf50' : sigPct >= 33 ? '#f5a623' : '#e53935';
                 var r = node('div', {
@@ -1044,7 +1026,7 @@ function wizardRepeater(onDone) {
                         muted('  ' + (n.encryption || 'open'))
                     ),
                     node('div', { style: 'display:flex;align-items:center;gap:8px' },
-                        bandPill(bandLabel),
+                        bandPill(bandRadio),
                         node('span', { style: 'color:' + sigColor }, sigPct + '%')
                     )
                 );
@@ -1123,6 +1105,11 @@ function wizardRepeater(onDone) {
             });
         }
 
+        uplinkRadioSel.addEventListener('change', function() {
+            if (apRadioSel.value === uplinkRadioSel.value)
+                apRadioSel.value = apRadioSel.value === 'radio0' ? 'radio1' : 'radio0';
+        });
+
         var scanBtn = btnSecondary('Scan', doScan);
 
         body.appendChild(node('div', { style: 'color:#666;font-size:12px;margin-bottom:14px;line-height:1.5' },
@@ -1196,12 +1183,12 @@ function openScanNearby() {
             while (tbl.rows.length > 1) tbl.deleteRow(1);
             data.forEach(function(bss) {
                 var b = (bss.mhz >= 5925) ? 6 : (bss.mhz >= 5000) ? 5 : 2;
-                var bandLabel = b === 6 ? '6 GHz' : b === 5 ? '5 GHz' : '2.4 GHz';
+                var bandRadio = b === 6 ? 'radio2' : b === 5 ? 'radio1' : 'radio0';
                 var sigPct = bss.quality_max ? Math.round(100 * bss.quality / bss.quality_max) : 0;
                 var sigColor = sigPct >= 66 ? '#4caf50' : sigPct >= 33 ? '#f5a623' : '#e53935';
                 var row = node('tr', { style: 'border-top:1px solid rgba(255,255,255,.06)' });
                 row.appendChild(node('td', { style: 'padding:4px 8px' }, node('span', { style: 'color:' + sigColor }, sigPct + '%')));
-                row.appendChild(node('td', { style: 'padding:4px 8px' }, bandPill(bandLabel)));
+                row.appendChild(node('td', { style: 'padding:4px 8px' }, bandPill(bandRadio)));
                 row.appendChild(node('td', { style: 'padding:4px 8px;color:#ddd;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, bss.ssid || ''));
                 row.appendChild(node('td', { style: 'padding:4px 8px;color:#aaa' }, String(bss.channel || '')));
                 row.appendChild(node('td', { style: 'padding:4px 8px;color:#aaa;white-space:nowrap' }, scanWidth(bss)));
@@ -1292,7 +1279,7 @@ function renderNetworks(data) {
         e.stopPropagation();
         ddMenu.style.display = ddMenu.style.display === 'none' ? 'block' : 'none';
     };
-    document.addEventListener('click', function() { ddMenu.style.display = 'none'; });
+    document.addEventListener('click', function() { ddMenu.style.display = 'none'; }, { once: true });
     ddWrap.appendChild(ddBtn);
     ddWrap.appendChild(ddMenu);
     var topBtns = node('div', { style: 'display:flex;gap:8px;align-items:center' },
@@ -1391,8 +1378,10 @@ function netRow(type, iface, data, cliCount, country, isLast) {
         applyFlow(applyDiv, function() {
             var isRelaydUplink = !is_mld && data.relayd && data.relayd.active &&
                 iface.network && iface.network === data.relayd.uplink_net;
+            var isRepeaterSta = !is_mld && iface.repeater && iface.mode === 'sta';
             var prom = is_mld ? layer2.mld_remove(sid) : layer2.iface_remove(sid);
             if (isRelaydUplink) prom = prom.then(function() { return layer2.relayd_remove(); });
+            if (isRepeaterSta) prom = prom.then(function() { return layer2.repeater_fw_remove(); });
             return prom.then(function(r) { return Object.assign({ restartRequired: 'wifi' }, r); });
         }, _onApplied);
     });
@@ -1511,7 +1500,8 @@ function netRow(type, iface, data, cliCount, country, isLast) {
             var uplink = (data.uplinks || []).find(function(u) { return u.sid === sid; });
             if (uplink) {
                 b.appendChild(sp('Connection status', 'display:block;color:#88888899;font-size:11px;font-weight:bold;letter-spacing:0.5px;margin:10px 0 6px'));
-                var _staRadio = (iface.radio && data.radios) ? data.radios.find(function(r) { return r.id === iface.radio; }) : null;
+                var _staRid = iface.device ? (Array.isArray(iface.device) ? iface.device[0] : iface.device) : null;
+                var _staRadio = (_staRid && data.radios) ? data.radios.find(function(r) { return r.id === _staRid; }) : null;
                 var _staNoise = _staRadio && _staRadio.noise != null ? _staRadio.noise : null;
                 // Add new connection fields here
                 var connItems = [
@@ -1555,7 +1545,12 @@ function netRow(type, iface, data, cliCount, country, isLast) {
                 : 'Remove "' + ssid + '"?';
             if (!confirm(warn)) return;
             applyFlow(applyDiv, function() {
+                var isRelaydUplink = !is_mld && data.relayd && data.relayd.active &&
+                    iface.network && iface.network === data.relayd.uplink_net;
+                var isRepeaterSta = !is_mld && iface.repeater && iface.mode === 'sta';
                 var prom = is_mld ? layer2.mld_remove(sid) : layer2.iface_remove(sid);
+                if (isRelaydUplink) prom = prom.then(function() { return layer2.relayd_remove(); });
+                if (isRepeaterSta) prom = prom.then(function() { return layer2.repeater_fw_remove(); });
                 return prom.then(function(r) { return Object.assign({ restartRequired: 'wifi' }, r); });
             }, _onApplied);
         }));
@@ -1586,7 +1581,6 @@ function netRow(type, iface, data, cliCount, country, isLast) {
             var apChVal = apRadio ? (apRadio.channel === 'auto' || apRadio.channel == null ? 'auto' : String(apRadio.channel)) : 'auto';
             var apChIn  = inputField(apChVal, 'auto or number');
             var apHtIn  = selectEl(apHtOpts, apRadio ? apRadio.htmode : null);
-            var apTxIn  = inputField(apRadio && apRadio.txpower_uci != null ? String(apRadio.txpower_uci) : '', 'auto');
             defs = [
                 { label: 'SSID',             key: 'ssid',      type: 'text',     val: ssid },
                 { label: 'Password',         key: 'key',       type: 'password', val: iface.key || '' },
@@ -1627,7 +1621,6 @@ function netRow(type, iface, data, cliCount, country, isLast) {
             if (apBand === 'radio1') apChWrap.appendChild(sp('DFS (CAC ~60s): 52–144', 'display:block;color:#555;font-size:11px;margin-top:3px'));
             b.appendChild(formRow('Channel', apChWrap));
             b.appendChild(formRow('Channel width', apHtIn));
-            b.appendChild(formRow('TX power (dBm)', apTxIn));
         }
 
         var saveBtn = btn('Save', null, function() {
@@ -1644,7 +1637,6 @@ function netRow(type, iface, data, cliCount, country, isLast) {
                 var ifaceProm = is_mld ? layer2.mld_set(sid, p) : layer2.iface_set(sid, p);
                 if (iface.mode === 'ap' && apRadio) {
                     var rp = { channel: apChIn.value.trim() || 'auto', htmode: apHtIn.value };
-                    if (apTxIn.value.trim()) rp.txpower = apTxIn.value.trim();
                     return layer2.radio_set(apRadio.id, rp).then(function(rr) {
                         if (!rr.ok) return Object.assign({ restartRequired: 'none' }, rr);
                         return ifaceProm.then(function(r) { return Object.assign({ restartRequired: r.ok ? 'wifi' : 'none' }, r); });
@@ -1709,7 +1701,7 @@ function renderClients(data) {
             });
         } else {
             var iface = (data.ifaces || []).find(function(f) { return f.ifname === c.ifname; });
-            if (iface && iface.radio) hdrEl.appendChild(bandPill(iface.radio));
+            if (iface && iface.device) hdrEl.appendChild(bandPill(Array.isArray(iface.device) ? iface.device[0] : iface.device));
         }
 
         // Signal (best per-link for MLO — iw top-level is 0 for MLO)
@@ -1821,20 +1813,50 @@ function renderRadios(data) {
     var country = (radios.length ? radios[0].country : null) || '—';
     var curTxMode = (radios.length ? radios[0].txpower_mode : null) || 'regdb';
     var TX_MODES = [['regdb','Regulatory (country regdb)'],['efuse_max','eFuse max (hardware maximum)'],['manual','Manual (per-radio dBm)']];
-    var txModeSel = selectEl(TX_MODES, curTxMode);
-    var radioTxInputs = []; // populated in radios.forEach below; used by system Apply & Reboot
-    txModeSel.onchange = function() {
-        var isManual = txModeSel.value === 'manual';
-        el.querySelectorAll('.txpower-manual-row').forEach(function(row) { row.style.display = isManual ? '' : 'none'; });
-    };
+    var txModeSel = selectEl(TX_MODES, _pendingTxMode || curTxMode);
+    var radioTxInputs = []; // populated in radios.forEach below; used by system Apply button
     var sysApplyDiv = node('div', {});
     var modeHints = {
         regdb:     'Regulatory: country SKU table enforced — stays within legal limits.',
         efuse_max: 'eFuse max: hardware maximum, ignores country limits. Use only if you know what you\'re doing.',
-        manual:    'Manual: enter dBm limits in the radio cards below, then click Apply & Reboot here — mode and limits are saved in one step.'
+        manual:    'Manual: enter dBm limits in the radio cards below, then click Apply here — mode and limits are saved in one step.'
     };
     var modeHintEl = sp(modeHints[curTxMode] || '', 'color:#555;font-size:11px;margin-bottom:8px;display:block');
-    txModeSel.addEventListener('change', function() { modeHintEl.textContent = modeHints[txModeSel.value] || ''; });
+    var applyTxBtn = btn(curTxMode === 'manual' && !_pendingTxMode ? 'Apply' : 'Apply & Reboot', null, function() {
+        applyFlow(sysApplyDiv, function() {
+            var mode = txModeSel.value;
+            var modeChanged = mode !== curTxMode;
+            if (!modeChanged && mode === 'manual') {
+                // Only dBm values changed — wifi reload is enough, no reboot needed
+                var txPromises = radioTxInputs
+                    .filter(function(item) { return item.txIn.value.trim(); })
+                    .map(function(item) { return layer2.radio_set(item.rid, { txpower: item.txIn.value.trim() }); });
+                if (!txPromises.length) return Promise.resolve({ ok: true, restartRequired: 'wifi', errors: [] });
+                return Promise.all(txPromises).then(function() {
+                    _pendingTxMode = null;
+                    return { ok: true, restartRequired: 'wifi', errors: [] };
+                });
+            }
+            return layer2.system_set_txpower_mode(mode).then(function(modeRes) {
+                if (!modeRes.ok) return modeRes;
+                _pendingTxMode = null;
+                if (mode !== 'manual') return modeRes;
+                var txPromises = radioTxInputs
+                    .filter(function(item) { return item.txIn.value.trim(); })
+                    .map(function(item) { return layer2.radio_set(item.rid, { txpower: item.txIn.value.trim() }); });
+                if (!txPromises.length) return modeRes;
+                return Promise.all(txPromises).then(function() { return modeRes; });
+            });
+        }, _onApplied);
+    });
+    txModeSel.onchange = function() {
+        var sel = txModeSel.value;
+        _pendingTxMode = sel !== curTxMode ? sel : null;
+        var isManual = sel === 'manual';
+        el.querySelectorAll('.txpower-manual-row').forEach(function(row) { row.style.display = isManual ? '' : 'none'; });
+        modeHintEl.textContent = modeHints[sel] || '';
+        applyTxBtn.textContent = (!_pendingTxMode && curTxMode === 'manual') ? 'Apply' : 'Apply & Reboot';
+    };
     el.appendChild(card(node('div', {},
         node('div', { style: 'display:flex;align-items:center;justify-content:space-between;margin-bottom:10px' },
             node('div', {},
@@ -1846,21 +1868,7 @@ function renderRadios(data) {
         ),
         formRow('TX power mode', txModeSel),
         modeHintEl,
-        node('div', { style: 'display:flex;gap:8px' },
-            btn('Apply & Reboot', null, function() {
-                applyFlow(sysApplyDiv, function() {
-                    var mode = txModeSel.value;
-                    return layer2.system_set_txpower_mode(mode).then(function(modeRes) {
-                        if (!modeRes.ok || mode !== 'manual') return modeRes;
-                        var txPromises = radioTxInputs
-                            .filter(function(item) { return item.txIn.value.trim(); })
-                            .map(function(item) { return layer2.radio_set(item.rid, { txpower: item.txIn.value.trim() }); });
-                        if (!txPromises.length) return modeRes;
-                        return Promise.all(txPromises).then(function() { return modeRes; });
-                    });
-                }, _onApplied);
-            })
-        ),
+        node('div', { style: 'display:flex;gap:8px' }, applyTxBtn),
         sysApplyDiv
     )));
 

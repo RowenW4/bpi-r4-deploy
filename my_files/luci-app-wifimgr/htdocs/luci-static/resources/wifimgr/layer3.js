@@ -49,11 +49,7 @@ async function load_diag() {
     return {
         sysinfo: sysinfoRes.ok ? sysinfoRes.data : null,
         logs:    logsRes,
-        txpower: [
-            tp0 && tp0.ok ? tp0.data : null,
-            tp1 && tp1.ok ? tp1.data : null,
-            tp2 && tp2.ok ? tp2.data : null
-        ]
+        txpower: [tp0, tp1, tp2]
     };
 }
 
@@ -116,8 +112,8 @@ async function wizard_mlo(radio_ids, params) {
 // For MLO STA: mlo='1' + mld_assoc_phy required (0=2G, 1=5G, 2=6G). mld_allowed_phy_bitmap defaults to 7.
 // Returns { ok, sid, restartRequired, errors }.
 async function wizard_sta(radio_id, params) {
-    const enc  = params.encryption || 'psk2';
     const isMlo = params.mlo === '1' || params.mlo === true;
+    const enc  = params.encryption || (isMlo ? 'sae' : 'psk2');
 
     if (isMlo) {
         // MLO STA: multi-radio, mld_assoc_band mandatory
@@ -170,6 +166,9 @@ async function wizard_repeater(uplink_radio_id, ap_radio_id, uplink_params, ap_p
     const apRes = await layer2.iface_add(ap_radio_id, 'ap', apWrite);
     if (!apRes.ok) return { ok: false, sta_sid: staRes.sid, ap_sid: null,
         restartRequired: 'none', errors: apRes.errors || [] };
+
+    // Add wwan to firewall wan zone so masquerade applies (L3 NAT for repeater clients)
+    await layer2.fw_wan_add_network('wwan');
 
     return { ok: true, sta_sid: staRes.sid, ap_sid: apRes.sid,
         restartRequired: 'wifi', errors: [] };

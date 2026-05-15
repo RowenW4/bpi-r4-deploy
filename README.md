@@ -1,5 +1,9 @@
 # OpenWrt + UniFi Stack for Banana Pi BPI-R4
 
+> ⚠️ **This deploy stack is for Banana Pi BPI-R4 only. It cannot be used for BPI-R4 Pro.**
+> BPI-R4 Pro is a different board with a different NAND layout, different 10G hardware, and different device trees.
+> Flashing these images on a BPI-R4 Pro **will brick it**.
+
 Run **OpenWrt** on Banana Pi BPI-R4 (MT7988A, Wi-Fi 7) with an optional **UniFi Protect + UniFi Network Application** stack — a cost-effective alternative to the Ubiquiti UNVR + Cloud Gateway combo.
 
 Complete install system that runs entirely on GitHub — no Linux machine needed.
@@ -38,6 +42,10 @@ Complete install system that runs entirely on GitHub — no Linux machine needed
 ---
 
 ## Board variants
+
+> ⚠️ **BPI-R4 Pro is a different board and is NOT supported.**
+> The BPI-R4 Pro has a different NAND partition layout, different 10G port hardware, and different device trees.
+> Flashing these images on a BPI-R4 Pro **will brick it**. This project supports **BPI-R4 only**.
 
 | # | Variant | RAM | WiFi | Notes |
 |---|---------|-----|------|-------|

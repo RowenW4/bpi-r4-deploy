@@ -179,7 +179,7 @@ async function radio_get_all() {
             noscan:           uciBool(sec.noscan),
             background_radar: uciBool(sec.background_radar),
             txpower_uci:      sec.txpower !== undefined ? uciInt(sec.txpower) : null,
-            txpower_mode:     sec.txpower_mode || (sec.txpower !== undefined ? 'manual' : 'regdb'),
+            txpower_mode:     sec.txpower_mode || (sec.sku_idx === undefined ? 'efuse_max' : (sec.txpower !== undefined ? 'manual' : 'regdb')),
             lpi_psd:          sec.lpi_psd          !== undefined ? uciBool(sec.lpi_psd)          : null,
             lpi_bcn_enhance:  sec.lpi_bcn_enhance  !== undefined ? uciBool(sec.lpi_bcn_enhance)  : null,
             lpi_sku_idx:      sec.lpi_sku_idx      !== undefined ? uciInt(sec.lpi_sku_idx)        : null,
@@ -252,9 +252,13 @@ async function system_set_txpower_mode(mode) {
         if (mode === 'efuse_max') {
             write.sku_idx = null;   // delete — driver uses eFuse max directly
             write.txpower = null;
+            write.lpi_sku_idx = null;
         } else {
             write.sku_idx = '0';    // regdb or manual: SKU table must be active
-            if (mode !== 'manual') write.txpower = null;
+            if (mode !== 'manual') {
+                write.txpower = null;
+                write.lpi_sku_idx = null;
+            }
         }
         const res = await layer1.uci_write('wireless', rid, write);
         if (!res.ok) { errors.push('uci_write failed: ' + rid); break; }
@@ -602,7 +606,7 @@ async function mld_get_all() {
                     channel:    ld.channel          ? parseInt(ld.channel)           : null,
                     bw_mhz:     bwMhz,
                     txpower:    txp,
-                    chan_util:  ld.chan_util_avg     !== undefined ? parseInt(ld.chan_util_avg)   : null,
+                    chan_util:  ld.chan_util_avg !== undefined ? (parseInt(ld.chan_util_avg) <= 100 ? parseInt(ld.chan_util_avg) : null) : null,
                     dfs_active: ld.dfs_active       ? uciBool(ld.dfs_active)        : false,
                     bssid:      ld['bssid[0]'] || ld.bssid || null
                 });
@@ -1242,6 +1246,14 @@ async function relayd_remove() {
     return layer1.relayd_remove();
 }
 
+async function fw_wan_add_network(name) {
+    return layer1.fw_wan_add_network(name);
+}
+
+async function repeater_fw_remove() {
+    return layer1.fw_wan_remove_network('wwan');
+}
+
 async function relayd_get() {
     const res = await layer1.uci_read('network');
     if (!res.ok) return l2ok({ active: false, uplink_net: null });
@@ -1271,7 +1283,7 @@ const Layer2 = {
     // system
     system_get_info, system_apply, system_apply_poll, system_all_up, system_get_logs, system_get_txpower_info,
     // relayd
-    relayd_setup, relayd_remove, relayd_get
+    relayd_setup, relayd_remove, relayd_get, fw_wan_add_network, repeater_fw_remove
 };
 
 return baseclass.extend(Layer2);
