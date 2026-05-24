@@ -79,21 +79,6 @@ echo "CONFIG_PACKAGE_trusted-firmware-a-mt7988-sdmmc-comb-4bg=y" >> .config
 echo "CONFIG_PACKAGE_trusted-firmware-a-mt7988-spim-nand-ubi-comb-4bg=y" >> .config
 
 
-# MxL862xx DSA switch driver (dangowrt generic patches)
-\cp -r ../my_files/bpi-r4-pro/patches-generic-backport/*.patch target/linux/generic/backport-6.12/
-\cp -r ../my_files/bpi-r4-pro/patches-generic-pending/*.patch target/linux/generic/pending-6.12/
-
-# Remove conflicting MTK SDK MxL torso patches (superseded by dangowrt complete driver)
 rm -f target/linux/mediatek/patches-6.12/732-net-phy-mxl-gpy-don-t-use-SGMII-AN-if-using-phylink.patch
-rm -f target/linux/mediatek/patches-6.12/999-dsa-04-add-mxl862xx-tag-formats.patch
-rm -f target/linux/mediatek/patches-6.12/999-dsa-05-add-mxl862xx-tag8021q-driver.patch
-rm -f target/linux/mediatek/patches-6.12/999-ephy-gpy211-add-mxl862xx-integrated-phy.patch
-# Remove mediatek copies of patches already in generic/backport-6.12
-rm -f target/linux/mediatek/patches-6.12/772-v7.1-net-dsa-move-dsa_bridge_ports-helper-to-dsa.h.patch
-rm -f target/linux/mediatek/patches-6.12/773-v7.1-net-dsa-add-bridge-member-iteration-macro.patch
-# Remove MTK SDK mxl862xx incremental patches (dangowrt backport replaces these entirely)
-rm -f target/linux/mediatek/patches-6.12/760-*.patch
-
-echo "CONFIG_NET_DSA_MXL862=y" >> .config
 
 bash ../mtk-openwrt-feeds/autobuild/unified/autobuild.sh filogic-mac80211-mt798x_rfb-wifi7_nic build
