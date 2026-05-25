@@ -73,6 +73,19 @@ ip link set enp0s3 up
 
 printf "        OK -- enp0s3 up at 192.168.1.2\n\n"
 
+# || 3b. DNS – UniFi AP auto-discovery ||||||||||||||||||||||||||||||||||||||||
+#
+# APs resolve hostname 'unifi' via DNS to find the controller after factory reset.
+# Without this, adoption requires manual SSH set-inform on every new AP.
+
+printf "[ 3b/7] Configuring DNS for UniFi AP auto-discovery...\n"
+
+uci add_list dhcp.@dnsmasq[0].address='/unifi/192.168.1.2'
+uci commit dhcp
+service dnsmasq restart
+
+printf "        OK -- 'unifi' resolves to 192.168.1.2 (AP auto-discovery enabled)\n\n"
+
 # || 4. NFT firewall rules |||||||||||||||||||||||||||||||||||||||||||||||||
 
 printf "[ 4/7 ] Configuring nftables firewall rules for Docker bridge networks...\n"

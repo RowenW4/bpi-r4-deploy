@@ -21,8 +21,8 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  OPENWRT_COMMIT: "99211b26fb3b9ed71d065a1fa35ce54a0d883944"
-  MTK_COMMIT: "dbf10418baf257033cf4c590f098db1022496dc6"
+  OPENWRT_COMMIT: "13ff2256e5dd9bc070f9a9c6a673bff4a9191837"
+  MTK_COMMIT: "dceb45f8cb945bce16f0e09f8d2cd974c9f0ce58"
 
 jobs:
   build:
@@ -215,6 +215,31 @@ jobs:
               cp unifi/unifi-network-setup-8gb.sh "$DIR/unifi-network-setup.sh"
             done
           fi
+
+      - name: Publish luci-app-wifimgr APK
+        if: github.event.inputs.variant == 'standard'
+        run: |
+          APK=$(ls openwrt/bin/packages/aarch64_cortex-a53/luci/luci-app-wifimgr-*.apk 2>/dev/null | head -1)
+          echo "APK_PATH=$APK" >> $GITHUB_ENV
+          echo "APK_NAME=$(basename $APK)" >> $GITHUB_ENV
+
+      - name: Publish wifimgr-latest release
+        if: github.event.inputs.variant == 'standard'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: wifimgr-latest
+          name: "luci-app-wifimgr (latest)"
+          body: |
+            Standalone APK for luci-app-wifimgr — install on any BPI-R4 running this firmware.
+
+            ```
+            apk add --allow-untrusted --no-network /tmp/${{ env.APK_NAME }}
+            ```
+
+            Built from commit: ${{ github.event.inputs.repo_commit || github.sha }}
+          files: ${{ env.APK_PATH }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish release-4gb-standard
         if: github.event.inputs.variant == 'standard'

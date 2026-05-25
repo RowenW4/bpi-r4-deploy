@@ -88,10 +88,18 @@ async function wizard_ap(radio_id, params) {
     const write = Object.assign({ encryption: enc }, params);
     delete write.radio_id;
 
+    // If this radio is part of an MLO AP, wifi reload would crash (EDCCA).
+    // Write UCI and reboot instead.
+    const mldsRes = await layer2.mld_get_all();
+    const mlds = (mldsRes && mldsRes.ok !== false) ? (Array.isArray(mldsRes) ? mldsRes : (mldsRes.data || [])) : [];
+    const isMloRadio = mlds.some(function(m) {
+        return m.mode === 'ap' && Array.isArray(m.radios) && m.radios.indexOf(radio_id) !== -1;
+    });
+
     const res = await layer2.iface_add(radio_id, 'ap', write);
     if (!res.ok) return { ok: false, sid: null, restartRequired: 'none', errors: res.errors || [] };
 
-    return { ok: true, sid: res.sid, restartRequired: 'wifi', errors: [] };
+    return { ok: true, sid: res.sid, restartRequired: 'reboot', errors: [] };
 }
 
 // Wizard: MLO setup (multi-radio AP).
@@ -120,14 +128,14 @@ async function wizard_sta(radio_id, params) {
         const mloParams = Object.assign({}, params, { encryption: enc, mlo: true });
         const res = await layer2.uplink_connect(radio_id, mloParams);
         if (!res.ok) return { ok: false, sid: null, restartRequired: 'none', errors: res.errors || [] };
-        return { ok: true, sid: res.sid, restartRequired: 'wifi', errors: [] };
+        return { ok: true, sid: res.sid, restartRequired: 'reboot', errors: [] };
     }
 
     // Legacy STA: single-radio
     const write = Object.assign({ encryption: enc, network: params.network || 'wwan' }, params);
     const res = await layer2.iface_add(radio_id, 'sta', write);
     if (!res.ok) return { ok: false, sid: null, restartRequired: 'none', errors: res.errors || [] };
-    return { ok: true, sid: res.sid, restartRequired: 'wifi', errors: [] };
+    return { ok: true, sid: res.sid, restartRequired: 'reboot', errors: [] };
 }
 
 // Wizard: relayd bridge (STA uplink on wwan, relay_bridge bridges wwan↔lan).
@@ -145,7 +153,7 @@ async function wizard_relayd(radio_id, params) {
         return { ok: false, sid: null, restartRequired: 'none', errors: ['relayd_setup failed'] };
     }
 
-    return { ok: true, sid: staRes.sid, restartRequired: 'wifi', errors: [] };
+    return { ok: true, sid: staRes.sid, restartRequired: 'reboot', errors: [] };
 }
 
 // Wizard: Repeater (STA uplink + local AP on separate radio).
@@ -171,7 +179,7 @@ async function wizard_repeater(uplink_radio_id, ap_radio_id, uplink_params, ap_p
     await layer2.fw_wan_add_network('wwan');
 
     return { ok: true, sta_sid: staRes.sid, ap_sid: apRes.sid,
-        restartRequired: 'wifi', errors: [] };
+        restartRequired: 'reboot', errors: [] };
 }
 
 // Wizard: Country / Regulatory change.

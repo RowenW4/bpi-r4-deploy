@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # Validated source commits (v1.1.1, 2026-05-14):
-#   OpenWrt:  99211b26fb3b9ed71d065a1fa35ce54a0d883944  (openwrt-25.12)
-#   MTK SDK:  dbf10418baf257033cf4c590f098db1022496dc6  (tarball in repo-cache/mtk-openwrt-feeds.tar.gz)
-OPENWRT_COMMIT=${OPENWRT_COMMIT:-99211b26fb3b9ed71d065a1fa35ce54a0d883944}
+#   OpenWrt:  13ff2256e5dd9bc070f9a9c6a673bff4a9191837  (openwrt-25.12)
+#   MTK SDK:  dceb45f8cb945bce16f0e09f8d2cd974c9f0ce58  (tarball in repo-cache/mtk-openwrt-feeds.tar.gz)
+OPENWRT_COMMIT=${OPENWRT_COMMIT:-13ff2256e5dd9bc070f9a9c6a673bff4a9191837}
 
 rm -rf openwrt
 rm -rf mtk-openwrt-feeds
@@ -18,7 +18,8 @@ mv mtk-clone mtk-openwrt-feeds
 #\cp -r my_files/feed_revision mtk-openwrt-feeds/autobuild/unified/
 
 \cp -r my_files/999-sfp-10-additional-quirks.patch mtk-openwrt-feeds/25.12/files/target/linux/mediatek/patches-6.12
-#\cp -r my_files/999-sfp-11-rtl8261be-mdio-none.patch mtk-openwrt-feeds/25.12/files/target/linux/mediatek/patches-6.12
+\cp -r my_files/999-sfp-11-rtl8261be-mdio-none.patch mtk-openwrt-feeds/25.12/files/target/linux/mediatek/patches-6.12
+\cp -r my_files/999-fix-00-xfrm-sw-sa-offload-ok.patch mtk-openwrt-feeds/25.12/files/target/linux/mediatek/patches-6.12
 
 ### tx_power check Ivan Mironov's patch - for defective BE14 boards with defective eeprom flash
 #\cp -r my_files/100-wifi-mt76-mt7996-Use-tx_power-from-default-fw-if-EEP.patch mtk-openwrt-feeds/autobuild/unified/filogic/mac80211/25.12/files/package/kernel/mt76/patches

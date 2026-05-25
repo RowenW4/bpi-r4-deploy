@@ -125,12 +125,12 @@ function parseIwDev(text) {
             continue;
         }
 
-        // Within a link block: channel or txpower (indented with 3+ tabs)
-        if (curLink !== null && (m = rawLine.match(/^\t{3,}channel\s+(.+)$/))) {
+        // Within a link block: channel or txpower (2 tabs + spaces or 3+ tabs)
+        if (curLink !== null && (m = rawLine.match(/^\t\t[\t ][\t ]*channel\s+(.+)$/))) {
             iface.mld_links[curLink].channel = m[1];
             continue;
         }
-        if (curLink !== null && (m = rawLine.match(/^\t{3,}txpower\s+(.+)$/))) {
+        if (curLink !== null && (m = rawLine.match(/^\t\t[\t ][\t ]*txpower\s+(.+)$/))) {
             iface.mld_links[curLink].txpower = m[1];
             continue;
         }
@@ -597,15 +597,20 @@ async function iw_link(ifname) {
 }
 
 async function iwinfo_scan(radio_id) {
-    // When a STA interface is active, wpa_supplicant owns the nl80211 scan state
-    // and ubus iwinfo scan on the AP interface returns empty. Try phy0.0-sta0 first
-    // (wpa_supplicant keeps fresh scan results); fall back to phy0.0-ap0 for pure
-    // AP setups. Each call wrapped separately — phy0.0-sta0 may not exist on AP-only
-    // routers and returns ubus "Not found" error.
+    // Try radio-specific interfaces first (STA before AP — wpa_supplicant keeps cached
+    // results on managed interfaces; AP interfaces return empty when wpa_supplicant
+    // is active). Fall back to sta-mld0 / phy0.0-sta* which always have cached results
+    // when any MLO STA is connected, regardless of the requested radio.
+    const n = radio_id ? (parseInt(radio_id.replace('radio', '')) || 0) : 0;
+    const pfx = 'phy0.' + n;
+    const candidates = [pfx + '-sta0', pfx + '-sta1', pfx + '-ap0',
+                        'sta-mld0', 'phy0.0-sta1', 'phy0.0-sta0'];
     let results = [];
-    try { results = await callIwInfoScan('phy0.0-sta0'); } catch(_) {}
-    if (!Array.isArray(results) || !results.length) {
-        try { results = await callIwInfoScan('phy0.0-ap0'); } catch(_) {}
+    for (const iface of candidates) {
+        try {
+            results = await callIwInfoScan(iface);
+            if (Array.isArray(results) && results.length) break;
+        } catch(_) {}
     }
     return ok(Array.isArray(results) ? results : []);
 }
@@ -652,6 +657,16 @@ async function wpa_status(ifname) {
     }
 }
 
+async function wpa_bss(ifname, bssid) {
+    try {
+        const res = await fs.exec('/usr/sbin/wpa_cli', ['-i', ifname, 'bss', bssid]);
+        if (res.code !== 0) return mkErr('exec_failed');
+        return ok(parseKv(res.stdout));
+    } catch(e) {
+        return mkErr('exec_failed');
+    }
+}
+
 async function wpa_scan_results(ifname) {
     try {
         const res = await fs.exec('/usr/sbin/wpa_cli', ['-i', ifname, 'scan_results']);
@@ -678,6 +693,23 @@ async function wpa_scan_results(ifname) {
 }
 
 // --- GROUP 6: sysfs functions (read-only, no mutex) ---
+
+async function iface_stats(ifname) {
+    try {
+        const base = '/sys/class/net/' + ifname + '/statistics/';
+        const [rxR, txR] = await Promise.all([
+            fs.exec('/bin/cat', [base + 'rx_bytes']),
+            fs.exec('/bin/cat', [base + 'tx_bytes'])
+        ]);
+        if (rxR.code !== 0 || txR.code !== 0) return mkErr('read_failed');
+        const rx = parseInt(rxR.stdout.trim());
+        const tx = parseInt(txR.stdout.trim());
+        if (isNaN(rx) || isNaN(tx)) return mkErr('parse_failed');
+        return ok({ rx, tx, ts: Date.now() });
+    } catch(e) {
+        return mkErr('exec_failed');
+    }
+}
 
 async function sysfs_read(path) {
     try {
@@ -904,6 +936,31 @@ async function system_exec(cmd, args) {
     }
 }
 
+async function wireless_backup() {
+    try {
+        const res = await fs.exec('/bin/cat', ['/etc/config/wireless']);
+        if (res.code !== 0) return mkErr('read_failed');
+        return ok(res.stdout);
+    } catch(e) {
+        return mkErr('exec_failed');
+    }
+}
+
+async function wireless_restore(content) {
+    if (hwBusy) return busy();
+    hwBusy = true;
+    try {
+        const wRes = await fs.write('/etc/config/wireless', content);
+        if (!wRes) { hwBusy = false; return mkErr('write_failed'); }
+        await fs.exec('/bin/sh', ['-c', '( /sbin/wifi reload >/tmp/wifi-reload.log 2>&1 ) &']);
+        hwBusy = false;
+        return { ok: true, status: 'PENDING_RELOAD', verified: false, data: null, error: null };
+    } catch(e) {
+        hwBusy = false;
+        return mkErr('exec_failed');
+    }
+}
+
 // --- Module export ---
 
 const Layer1 = {
@@ -941,8 +998,10 @@ const Layer1 = {
     iw_reg,
     // GROUP 5: wpa_cli
     wpa_status,
+    wpa_bss,
     wpa_scan_results,
     // GROUP 6: sysfs
+    iface_stats,
     sysfs_read,
     iw_survey_noise,
     sysfs_thermal,
@@ -959,7 +1018,9 @@ const Layer1 = {
     system_wifi_reload,
     system_reboot,
     system_logs,
-    system_exec
+    system_exec,
+    wireless_backup,
+    wireless_restore
 };
 
 return baseclass.extend(Layer1);

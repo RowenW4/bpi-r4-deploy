@@ -233,6 +233,7 @@ define Device/bananapi_bpi-r4-8gb
   DEVICE_DTS := mt7988a-bananapi-bpi-r4
   DEVICE_DTS_CONFIG := config-mt7988a-bananapi-bpi-r4
   $(call Device/bananapi_bpi-r4-common-8gb)
+  SUPPORTED_DEVICES += bananapi,bpi-r4
 endef
 TARGET_DEVICES += bananapi_bpi-r4-8gb
 
